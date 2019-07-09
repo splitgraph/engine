@@ -19,4 +19,7 @@ git cherry-pick 485c5c6c0dae58b5c6dd093809d83f09fc56f8d4
 # to be just the schema an image is checked out into.
 git apply /build_scripts/fdws/multicorn/schema_qualify_check.patch
 
+# Apply a patch to get Multicorn to compile against pg12
+git apply /build_scripts/fdws/multicorn/compile_on_pg12.patch
+
 PYTHON_OVERRIDE=python3 make install

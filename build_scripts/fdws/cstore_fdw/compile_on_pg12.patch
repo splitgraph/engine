@@ -1,0 +1,202 @@
+diff --git a/Makefile b/Makefile
+index e7e9d13..7b2e81c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -41,10 +41,6 @@ ifndef MAJORVERSION
+     MAJORVERSION := $(basename $(VERSION))
+ endif
+ 
+-ifeq (,$(findstring $(MAJORVERSION), 9.3 9.4 9.5 9.6 10 11))
+-    $(error PostgreSQL 9.3 or 9.4 or 9.5 or 9.6 or 10 or 11 is required to compile this extension)
+-endif
+-
+ cstore.pb-c.c: cstore.proto
+ 	protoc-c --c_out=. cstore.proto
+ 
+diff --git a/cstore_compression.c b/cstore_compression.c
+index 9c5c55d..884a51a 100644
+--- a/cstore_compression.c
++++ b/cstore_compression.c
+@@ -143,7 +143,7 @@ DecompressBuffer(StringInfo buffer, CompressionType compressionType)
+ #if PG_VERSION_NUM >= 90500
+ 		decompressedByteCount = pglz_decompress(CSTORE_COMPRESS_RAWDATA(buffer->data),
+ 												compressedDataSize,
+-												decompressedData, decompressedDataSize);
++												decompressedData, decompressedDataSize, 0);
+ 
+ 		if (decompressedByteCount < 0)
+ 		{
+diff --git a/cstore_fdw.c b/cstore_fdw.c
+index cc36d2c..e146910 100644
+--- a/cstore_fdw.c
++++ b/cstore_fdw.c
+@@ -25,6 +25,8 @@
+ #include "access/reloptions.h"
+ #include "access/sysattr.h"
+ #include "access/tuptoaster.h"
++#include "access/tableam.h"
++#include "access/heapam.h"
+ #include "catalog/namespace.h"
+ #include "catalog/pg_foreign_table.h"
+ #include "catalog/pg_namespace.h"
+@@ -43,7 +45,7 @@
+ #include "optimizer/pathnode.h"
+ #include "optimizer/planmain.h"
+ #include "optimizer/restrictinfo.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "parser/parser.h"
+ #include "parser/parsetree.h"
+ #include "parser/parse_coerce.h"
+@@ -55,8 +57,7 @@
+ #include "utils/memutils.h"
+ #include "utils/lsyscache.h"
+ #include "utils/rel.h"
+-#include "utils/tqual.h"
+-
++#include "utils/snapmgr.h"
+ 
+ /* local functions forward declarations */
+ #if PG_VERSION_NUM >= 100000
+@@ -572,7 +573,7 @@ CopyIntoCStoreTable(const CopyStmt *copyStatement, const char *queryString)
+ 	{
+ 		/* read the next row in tupleContext */
+ 		MemoryContext oldContext = MemoryContextSwitchTo(tupleContext);
+-		nextRowFound = NextCopyFrom(copyState, NULL, columnValues, columnNulls, NULL);
++		nextRowFound = NextCopyFrom(copyState, NULL, columnValues, columnNulls);
+ 		MemoryContextSwitchTo(oldContext);
+ 
+ 		/* write the row to the cstore file */
+@@ -964,9 +965,8 @@ DistributedTable(Oid relationId)
+ 	bool distributedTable = false;
+ 	Oid partitionOid = InvalidOid;
+ 	Relation heapRelation = NULL;
+-	HeapScanDesc scanDesc = NULL;
+-	const int scanKeyCount = 1;
+-	ScanKeyData scanKey[scanKeyCount];
++	TableScanDesc scanDesc = NULL;
++	ScanKeyData scanKey[1];
+ 	HeapTuple heapTuple = NULL;
+ 
+ 	bool missingOK = true;
+@@ -989,13 +989,13 @@ DistributedTable(Oid relationId)
+ 	ScanKeyInit(&scanKey[0], ATTR_NUM_PARTITION_RELATION_ID, InvalidStrategy,
+ 				F_OIDEQ, ObjectIdGetDatum(relationId));
+ 
+-	scanDesc = heap_beginscan(heapRelation, SnapshotSelf, scanKeyCount, scanKey);
++	scanDesc = table_beginscan(heapRelation, SnapshotSelf, 1, scanKey);
+ 
+ 	heapTuple = heap_getnext(scanDesc, ForwardScanDirection);
+ 
+ 	distributedTable = HeapTupleIsValid(heapTuple);
+ 
+-	heap_endscan(scanDesc);
++	table_endscan(scanDesc);
+ 	relation_close(heapRelation, AccessShareLock);
+ 
+ 	return distributedTable;
+@@ -2060,16 +2060,7 @@ CStoreAcquireSampleRows(Relation relation, int logLevel,
+ 	foreignScan->fdw_private = foreignPrivateList;
+ 
+ 	/* set up tuple slot */
+-	columnValues = palloc0(columnCount * sizeof(Datum));
+-	columnNulls = palloc0(columnCount * sizeof(bool));
+-#if PG_VERSION_NUM >= 110000
+-	scanTupleSlot = MakeTupleTableSlot(NULL);
+-#else
+-	scanTupleSlot = MakeTupleTableSlot();
+-#endif
+-	scanTupleSlot->tts_tupleDescriptor = tupleDescriptor;
+-	scanTupleSlot->tts_values = columnValues;
+-	scanTupleSlot->tts_isnull = columnNulls;
++    scanTupleSlot = MakeTupleTableSlot(tupleDescriptor, NULL);
+ 
+ 	/* setup scan state */
+ 	scanState = makeNode(ForeignScanState);
+@@ -2107,7 +2098,7 @@ CStoreAcquireSampleRows(Relation relation, int logLevel,
+ 		MemoryContextSwitchTo(oldContext);
+ 
+ 		/* if there are no more records to read, break */
+-		if (scanTupleSlot->tts_isempty)
++		if (TTS_EMPTY(scanTupleSlot))
+ 		{
+ 			break;
+ 		}
+@@ -2270,13 +2261,13 @@ CStoreExecForeignInsert(EState *executorState, ResultRelInfo *relationInfo,
+ 	TableWriteState *writeState = (TableWriteState*) relationInfo->ri_FdwState;
+ 
+ 	Assert(writeState != NULL);
+-
+-	if(HeapTupleHasExternal(tupleSlot->tts_tuple))
+-	{
+-		/* detoast any toasted attributes */
+-		tupleSlot->tts_tuple = toast_flatten_tuple(tupleSlot->tts_tuple,
+-												   tupleSlot->tts_tupleDescriptor);
+-	}
++//
++//	if(HeapTupleHasExternal(tupleSlot->tts_tuple))
++//	{
++//		/* detoast any toasted attributes */
++//		tupleSlot->tts_tuple = toast_flatten_tuple(tupleSlot->tts_tuple,
++//												   tupleSlot->tts_tupleDescriptor);
++//	}
+ 
+ 	slot_getallattrs(tupleSlot);
+ 
+diff --git a/cstore_reader.c b/cstore_reader.c
+index 1e93178..b3c3f8b 100644
+--- a/cstore_reader.c
++++ b/cstore_reader.c
+@@ -23,10 +23,10 @@
+ #include "access/skey.h"
+ #include "commands/defrem.h"
+ #include "nodes/makefuncs.h"
++#include "nodes/nodeFuncs.h"
+ #include "optimizer/clauses.h"
+-#include "optimizer/predtest.h"
++#include "optimizer/optimizer.h"
+ #include "optimizer/restrictinfo.h"
+-#include "optimizer/var.h"
+ #include "port.h"
+ #include "storage/fd.h"
+ #include "utils/memutils.h"
+@@ -80,7 +80,7 @@ static void DeserializeBlockData(StripeBuffers *stripeBuffers, uint64 blockIndex
+ 								 TupleDesc tupleDescriptor);
+ static Datum ColumnDefaultValue(TupleConstr *tupleConstraints,
+ 								Form_pg_attribute attributeForm);
+-static int64 FileSize(FILE *file);
++static int64 CStoreFileSize(FILE *file);
+ static StringInfo ReadFromFile(FILE *file, uint64 offset, uint32 size);
+ static void ResetUncompressedBlockData(ColumnBlockData **blockDataArray,
+ 									   uint32 columnCount);
+@@ -181,7 +181,7 @@ CStoreReadFooter(StringInfo tableFooterFilename)
+ 						errhint("Try copying in data to the table.")));
+ 	}
+ 
+-	footerFileSize = FileSize(tableFooterFile);
++	footerFileSize = CStoreFileSize(tableFooterFile);
+ 	if (footerFileSize < CSTORE_POSTSCRIPT_SIZE_LENGTH)
+ 	{
+ 		ereport(ERROR, (errmsg("invalid cstore file")));
+@@ -1289,7 +1289,7 @@ ColumnDefaultValue(TupleConstr *tupleConstraints, Form_pg_attribute attributeFor
+ 
+ /* Returns the size of the given file handle. */
+ static int64
+-FileSize(FILE *file)
++CStoreFileSize(FILE *file)
+ {
+ 	int64 fileSize = 0;
+ 	int fseekResult = 0;
+diff --git a/cstore_writer.c b/cstore_writer.c
+index 1148dbd..02d5a4d 100644
+--- a/cstore_writer.c
++++ b/cstore_writer.c
+@@ -23,7 +23,7 @@
+ #include "access/nbtree.h"
+ #include "catalog/pg_collation.h"
+ #include "commands/defrem.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "port.h"
+ #include "storage/fd.h"
+ #include "utils/memutils.h"

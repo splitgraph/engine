@@ -1,0 +1,44 @@
+diff --git a/src/multicorn.c b/src/multicorn.c
+index a43d28e..b13cca8 100644
+--- a/src/multicorn.c
++++ b/src/multicorn.c
+@@ -12,7 +12,7 @@
+ #include "optimizer/planmain.h"
+ #include "optimizer/restrictinfo.h"
+ #include "optimizer/clauses.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "access/reloptions.h"
+ #include "access/relscan.h"
+ #include "access/sysattr.h"
+@@ -24,7 +24,6 @@
+ #include "utils/lsyscache.h"
+ #include "utils/rel.h"
+ #include "parser/parsetree.h"
+-#include "dynloader.h"
+ #include "executor/spi.h"
+ 
+ 
+diff --git a/src/multicorn.h b/src/multicorn.h
+index 4572332..7ada834 100644
+--- a/src/multicorn.h
++++ b/src/multicorn.h
+@@ -13,7 +13,6 @@
+ #include "nodes/bitmapset.h"
+ #include "nodes/makefuncs.h"
+ #include "nodes/pg_list.h"
+-#include "nodes/relation.h"
+ #include "utils/builtins.h"
+ #include "utils/syscache.h"
+ 
+diff --git a/src/query.c b/src/query.c
+index beb0d05..0467c5b 100644
+--- a/src/query.c
++++ b/src/query.c
+@@ -1,5 +1,5 @@
+ #include "multicorn.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "optimizer/clauses.h"
+ #include "optimizer/pathnode.h"
+ #include "optimizer/subselect.h"

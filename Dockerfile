@@ -1,4 +1,4 @@
-FROM postgres:11.3
+FROM postgres:12
 
 RUN apt-get update -qq && \
     apt-get install -y \
@@ -11,18 +11,18 @@ RUN apt-get update -qq && \
         pkgconf \
         autoconf \
         libtool \
-        postgresql-server-dev-11 \
+        postgresql-server-dev-12 \
         libmongoc-1.0.0 \
         libmongoc-dev \
         protobuf-c-compiler \
-        libprotobuf-c0-dev \
+        libprotobuf-c-dev \
         zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
 
-RUN wget https://dev.mysql.com/get/mysql-apt-config_0.8.12-1_all.deb
+RUN wget https://dev.mysql.com/get/mysql-apt-config_0.8.13-1_all.deb
 RUN echo mysql-apt-config mysql-apt-config/select-server  select  mysql-8.0 | debconf-set-selections && \
     echo mysql-apt-config mysql-apt-config/select-product select Apply | debconf-set-selections
-RUN DEBIAN_FRONTEND=noninteractive dpkg -i mysql-apt-config_0.8.12-1_all.deb
-RUN apt-get update -qq && apt-get install -y libmysqlclient-dev && rm -rf /var/lib/apt/lists/*
+RUN DEBIAN_FRONTEND=noninteractive dpkg -i mysql-apt-config_0.8.13-1_all.deb
+RUN apt-get update -qq && apt-get install -y default-libmysqlclient-dev && rm -rf /var/lib/apt/lists/*
 
 # Install Python 3.7.3 globally.
 RUN curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
@@ -36,11 +36,11 @@ RUN mkdir -p /build_scripts
 COPY build_scripts /build_scripts/
 
 # cstore_fdw
-RUN ./build_scripts/fdws/cstore_fdw/build_cstore_fdw.sh
-# Mongo FDW
-RUN ./build_scripts/fdws/mongo_fdw/build_mongo_fdw.sh
-# MySQL FDW
-RUN ./build_scripts/fdws/mysql_fdw/build_mysql_fdw.sh
+ RUN ./build_scripts/fdws/cstore_fdw/build_cstore_fdw.sh
+# Mongo FDW -- doesn't build for now
+# RUN ./build_scripts/fdws/mongo_fdw/build_mongo_fdw.sh
+# MySQL FDW -- dowsn't build for now
+# RUN ./build_scripts/fdws/mysql_fdw/build_mysql_fdw.sh
 # Multicorn
 RUN ./build_scripts/fdws/multicorn/build_multicorn.sh
 
@@ -63,18 +63,16 @@ RUN ./build_scripts/build_splitgraph.sh
 COPY init_scripts /docker-entrypoint-initdb.d/
 
 # pl/python
-# The postgresql-plpython3-11 in stretch (debian that the pg11 image is currently based on)
-# is built against python 3.5 whereas we want to use at least 3.6 and already build multicorn against it.
 # Building just plpython3 ourselves is non-trivial, as it requires
 # the whole Postgres source tree to be in place (can't just do a shallow clone
 # and build only that extension.)
 #
-# So, hack time, get the archive from debian sid and install just the
+# So, hack time, get the archive from debian experimental and install just the
 # package itself without dependencies (deps are libc>=2.14 -- we have 2.24 -- and libpython3.7
 # which we compiled earlier)
 
-RUN wget http://http.us.debian.org/debian/pool/main/p/postgresql-11/postgresql-plpython3-11_11.4-1_amd64.deb && \
-    echo "fef3a643b255e80e1d471800ba337774df80968fd2a26c89cd90bd9709efaa21  postgresql-plpython3-11_11.4-1_amd64.deb" | shasum -c && \
-    dpkg --force-all -i postgresql-plpython3-11_11.4-1_amd64.deb
+RUN wget http://http.us.debian.org/debian/pool/main/p/postgresql-12/postgresql-plpython3-12_12~beta2-1_amd64.deb && \
+    echo "56121fe5d6c64d848287f17e76b5a9ccabca372b0b8e2459b7ed0c485b5c621c  postgresql-plpython3-12_12~beta2-1_amd64.deb" | shasum -c && \
+    dpkg --force-all -i postgresql-plpython3-12_12~beta2-1_amd64.deb
 
 CMD ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
