@@ -1,0 +1,210 @@
+diff --git a/Makefile b/Makefile
+index d189502..ed4e666 100644
+--- a/Makefile
++++ b/Makefile
+@@ -48,9 +48,6 @@ include $(PGXS)
+ ifndef MAJORVERSION
+ MAJORVERSION := $(basename $(VERSION))
+ endif
+-ifeq (,$(findstring $(MAJORVERSION), 9.3 9.4 9.5 9.6 10 11))
+-$(error PostgreSQL 9.3, 9.4, 9.5, 9.6 10 or 11 is required to compile this extension)
+-endif
+ 
+ else
+ subdir = contrib/mysql_fdw
+diff --git a/deparse.c b/deparse.c
+index e9bf5d8..e116c46 100644
+--- a/deparse.c
++++ b/deparse.c
+@@ -20,6 +20,7 @@
+ #include "pgtime.h"
+ 
+ #include "access/heapam.h"
++#include "access/table.h"
+ #include "access/htup_details.h"
+ #include "access/sysattr.h"
+ #include "access/transam.h"
+@@ -32,7 +33,7 @@
+ #include "datatype/timestamp.h"
+ #include "nodes/nodeFuncs.h"
+ #include "optimizer/clauses.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "parser/parsetree.h"
+ #include "utils/builtins.h"
+ #include "utils/lsyscache.h"
+@@ -87,7 +88,6 @@ static void deparseExpr(Expr *expr, deparse_expr_cxt *context);
+ static void mysql_deparse_var(Var *node, deparse_expr_cxt *context);
+ static void mysql_deparse_const(Const *node, deparse_expr_cxt *context);
+ static void mysql_deparse_param(Param *node, deparse_expr_cxt *context);
+-static void mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context);
+ static void mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context);
+ static void mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context);
+ static void mysql_deparse_operator_name(StringInfo buf, Form_pg_operator opform);
+@@ -504,9 +504,6 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
+ 		case T_Param:
+ 			mysql_deparse_param((Param *) node, context);
+ 			break;
+-		case T_ArrayRef:
+-			mysql_deparse_array_ref((ArrayRef *) node, context);
+-			break;
+ 		case T_FuncExpr:
+ 			mysql_deparse_func_expr((FuncExpr *) node, context);
+ 			break;
+@@ -818,52 +815,6 @@ mysql_deparse_param(Param *node, deparse_expr_cxt *context)
+ }
+ 
+ /*
+- * Deparse an array subscript expression.
+- */
+-static void
+-mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context)
+-{
+-	StringInfo	buf = context->buf;
+-	ListCell   *lowlist_item;
+-	ListCell   *uplist_item;
+-
+-	/* Always parenthesize the expression. */
+-	appendStringInfoChar(buf, '(');
+-
+-	/*
+-	 * Deparse referenced array expression first.  If that expression includes
+-	 * a cast, we have to parenthesize to prevent the array subscript from
+-	 * being taken as typename decoration.  We can avoid that in the typical
+-	 * case of subscripting a Var, but otherwise do it.
+-	 */
+-	if (IsA(node->refexpr, Var))
+-		deparseExpr(node->refexpr, context);
+-	else
+-	{
+-		appendStringInfoChar(buf, '(');
+-		deparseExpr(node->refexpr, context);
+-		appendStringInfoChar(buf, ')');
+-	}
+-
+-	/* Deparse subscript expressions. */
+-	lowlist_item = list_head(node->reflowerindexpr);	/* could be NULL */
+-	foreach(uplist_item, node->refupperindexpr)
+-	{
+-		appendStringInfoChar(buf, '[');
+-		if (lowlist_item)
+-		{
+-			deparseExpr(lfirst(lowlist_item), context);
+-			appendStringInfoChar(buf, ':');
+-			lowlist_item = lnext(lowlist_item);
+-		}
+-		deparseExpr(lfirst(uplist_item), context);
+-		appendStringInfoChar(buf, ']');
+-	}
+-
+-	appendStringInfoChar(buf, ')');
+-}
+-
+-/*
+  * This possible that name of function in PostgreSQL and
+  * mysql differ, so return the mysql equelent function name
+  */
+@@ -1355,43 +1306,6 @@ foreign_expr_walker(Node *node,
+ 					state = FDW_COLLATE_UNSAFE;
+ 			}
+ 			break;
+-		case T_ArrayRef:
+-			{
+-				ArrayRef   *ar = (ArrayRef *) node;;
+-
+-				/* Assignment should not be in restrictions. */
+-				if (ar->refassgnexpr != NULL)
+-					return false;
+-
+-				/*
+-				 * Recurse to remaining subexpressions.  Since the array
+-				 * subscripts must yield (noncollatable) integers, they won't
+-				 * affect the inner_cxt state.
+-				 */
+-				if (!foreign_expr_walker((Node *) ar->refupperindexpr,
+-										 glob_cxt, &inner_cxt))
+-					return false;
+-				if (!foreign_expr_walker((Node *) ar->reflowerindexpr,
+-										 glob_cxt, &inner_cxt))
+-					return false;
+-				if (!foreign_expr_walker((Node *) ar->refexpr,
+-										 glob_cxt, &inner_cxt))
+-					return false;
+-
+-				/*
+-				 * Array subscripting should yield same collation as input,
+-				 * but for safety use same logic as for function nodes.
+-				 */
+-				collation = ar->refcollid;
+-				if (collation == InvalidOid)
+-					state = FDW_COLLATE_NONE;
+-				else if (inner_cxt.state == FDW_COLLATE_SAFE &&
+-						 collation == inner_cxt.collation)
+-					state = FDW_COLLATE_SAFE;
+-				else
+-					state = FDW_COLLATE_UNSAFE;
+-			}
+-			break;
+ 		case T_FuncExpr:
+ 			{
+ 				FuncExpr   *fe = (FuncExpr *) node;
+diff --git a/mysql_fdw.c b/mysql_fdw.c
+index 33473af..e25fdf8 100644
+--- a/mysql_fdw.c
++++ b/mysql_fdw.c
+@@ -25,6 +25,7 @@
+ #include <errmsg.h>
+ 
+ #include "access/reloptions.h"
++#include "access/table.h"
+ #include "catalog/pg_foreign_server.h"
+ #include "catalog/pg_foreign_table.h"
+ #include "catalog/pg_user_mapping.h"
+@@ -66,7 +67,7 @@
+ #include "optimizer/planmain.h"
+ #include "optimizer/prep.h"
+ #include "optimizer/restrictinfo.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "parser/parsetree.h"
+ #include "utils/builtins.h"
+ #include "utils/guc.h"
+diff --git a/mysql_fdw.h b/mysql_fdw.h
+index 8fdc282..4c4cd13 100644
+--- a/mysql_fdw.h
++++ b/mysql_fdw.h
+@@ -27,8 +27,8 @@
+ 
+ #include "access/tupdesc.h"
+ #include "foreign/foreign.h"
++#include "nodes/pathnodes.h"
+ #include "lib/stringinfo.h"
+-#include "nodes/relation.h"
+ #include "utils/rel.h"
+ 
+ #define MYSQL_PREFETCH_ROWS	100
+diff --git a/mysql_query.c b/mysql_query.c
+index 34e97aa..ebf9f81 100644
+--- a/mysql_query.c
++++ b/mysql_query.c
+@@ -64,7 +64,7 @@
+ #include "optimizer/planmain.h"
+ #include "optimizer/prep.h"
+ #include "optimizer/restrictinfo.h"
+-#include "optimizer/var.h"
++#include "optimizer/optimizer.h"
+ #include "parser/parsetree.h"
+ #include "utils/builtins.h"
+ #include "utils/guc.h"
+diff --git a/mysql_query.h b/mysql_query.h
+index 2256972..04ba51c 100644
+--- a/mysql_query.h
++++ b/mysql_query.h
+@@ -18,7 +18,6 @@
+ 
+ #include "foreign/foreign.h"
+ #include "lib/stringinfo.h"
+-#include "nodes/relation.h"
+ #include "utils/rel.h"
+ 
+ 

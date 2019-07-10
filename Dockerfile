@@ -16,13 +16,22 @@ RUN apt-get update -qq && \
         libmongoc-dev \
         protobuf-c-compiler \
         libprotobuf-c-dev \
-        zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
+        zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+        cmake
+
+# Install MySQL dev headers.
+#
+# postgres:12 is based on buster but at the time of writing,
+# the package repo added via the official route (downloading and installing mysql-apt-config) is
+# empty (http://repo.mysql.com/apt/debian/dists/buster/mysql-8.0/binary-amd64/Packages)
+# -- so we force the distro codename to "stretch".
 
 RUN wget https://dev.mysql.com/get/mysql-apt-config_0.8.13-1_all.deb
-RUN echo mysql-apt-config mysql-apt-config/select-server  select  mysql-8.0 | debconf-set-selections && \
+RUN echo mysql-apt-config mysql-apt-config/repo-codename  select stretch | debconf-set-selections && \
+    echo mysql-apt-config mysql-apt-config/select-server  select mysql-8.0 | debconf-set-selections && \
     echo mysql-apt-config mysql-apt-config/select-product select Apply | debconf-set-selections
 RUN DEBIAN_FRONTEND=noninteractive dpkg -i mysql-apt-config_0.8.13-1_all.deb
-RUN apt-get update -qq && apt-get install -y default-libmysqlclient-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && apt-get install -y libmysqlclient-dev && rm -rf /var/lib/apt/lists/*
 
 # Install Python 3.7.3 globally.
 RUN curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
@@ -36,11 +45,11 @@ RUN mkdir -p /build_scripts
 COPY build_scripts /build_scripts/
 
 # cstore_fdw
- RUN ./build_scripts/fdws/cstore_fdw/build_cstore_fdw.sh
+RUN ./build_scripts/fdws/cstore_fdw/build_cstore_fdw.sh
 # Mongo FDW -- doesn't build for now
-# RUN ./build_scripts/fdws/mongo_fdw/build_mongo_fdw.sh
+RUN ./build_scripts/fdws/mongo_fdw/build_mongo_fdw.sh
 # MySQL FDW -- dowsn't build for now
-# RUN ./build_scripts/fdws/mysql_fdw/build_mysql_fdw.sh
+RUN ./build_scripts/fdws/mysql_fdw/build_mysql_fdw.sh
 # Multicorn
 RUN ./build_scripts/fdws/multicorn/build_multicorn.sh
 

@@ -24,6 +24,7 @@ cd mysql_fdw || {
 
 echo "Build mysql_fdw..."
 
+git apply /build_scripts/fdws/mysql_fdw/compile_on_pg12.patch
 USE_PGXS=1 make && USE_PGXS=1 make install
 
 echo "Finished building mysql_fdw."
