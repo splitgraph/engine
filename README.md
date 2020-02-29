@@ -1,3 +1,7 @@
+# The engine has now moved
+
+The engine is now in the [main Splitgraph repository](https://github.com/splitgraph/splitgraph/tree/master/engine).
+
 # Splitgraph Engine
 
 A normal Splitgraph installation consists of two components: the Splitgraph
